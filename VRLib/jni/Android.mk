@@ -69,7 +69,6 @@ LOCAL_SRC_FILES  := LibOVR/Src/Kernel/OVR_Alg.cpp \
                     VrApi/LocalPreferences.cpp \
                     VrApi/WarpGeometry.cpp \
                     VrApi/WarpProgram.cpp \
-                    VrApi/Sensors/MY_SensorGyroDevice.cpp \
                     VrApi/Sensors/OVR_DeviceHandle.cpp \
                     VrApi/Sensors/OVR_DeviceImpl.cpp \
                     VrApi/Sensors/OVR_LatencyTest.cpp \
@@ -87,6 +86,7 @@ LOCAL_SRC_FILES  := LibOVR/Src/Kernel/OVR_Alg.cpp \
                     VrApi/Sensors/OVR_Android_SensorDevice.cpp \
                     VrApi/Sensors/OVR_Android_PhoneSensors.cpp \
                     VrApi/Sensors/OVR_Stereo.cpp \
+                    VrApi/Sensors/MyUsbThread.cpp \
                     VRMenu/VRMenuComponent.cpp \
                     VRMenu/VRMenuMgr.cpp \
                     VRMenu/VRMenuObjectLocal.cpp \

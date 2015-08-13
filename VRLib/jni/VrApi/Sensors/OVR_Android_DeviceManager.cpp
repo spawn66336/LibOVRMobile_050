@@ -22,17 +22,14 @@ Copyright   :   Copyright 2014 Oculus VR, LLC. All Rights reserved.
 #include "Kernel/OVR_Log.h"
 
 #include <jni.h>
-#include "MY_SensorGyroDevice.h"
-#include "Kernel/OVR_Alg.h"
-
-
-
-
-#define EVENT_IDEN 23
 
 jobject gRiftconnection;
 
-namespace OVR { namespace Android {
+namespace OVR { 
+
+	int ReadSensorDataFromUsb();
+
+	namespace Android {
 
 //-------------------------------------------------------------------------------------
 // **** Android::DeviceManager
@@ -55,11 +52,9 @@ bool DeviceManager::Initialize(DeviceBase*)
         return false;
 
     // Wait for the thread to be fully up and running.
-	//等待线程初始化完毕
     pThread->StartupEvent.Wait();
 
     // Do this now that we know the thread's run loop.
-	//创建HID设备（USB设备）管理器
     HidDeviceManager = *HIDDeviceManager::CreateInternal(this);
          
     pCreateDesc->pDevice = this;
@@ -130,21 +125,16 @@ bool DeviceManager::GetDeviceInfo(DeviceInfo* info) const
 
 DeviceEnumerator<> DeviceManager::EnumerateDevicesEx(const DeviceEnumerationArgs& args)
 {
-	LogText("Call OVR::DeviceManager::EnumerateDevicesEx\n");
     // TBD: Can this be avoided in the future, once proper device notification is in place?
     pThread->PushCall((DeviceManagerImpl*)this,
                       &DeviceManager::EnumerateAllFactoryDevices, true);
-	LogText("Finished Call  pThread->PushCall\n");
-    DeviceEnumerator<> e = DeviceManagerImpl::EnumerateDevicesEx(args);
-	LogText("Finished Call   DeviceEnumerator<> e = DeviceManagerImpl::EnumerateDevicesEx(args)\n");
-	return e;
+
+    return DeviceManagerImpl::EnumerateDevicesEx(args);
 }
 
 
 //-------------------------------------------------------------------------------------
 // ***** DeviceManager Thread 
-
-
 
 DeviceManagerThread::DeviceManagerThread()
     : Thread(ThreadStackSize),
@@ -153,8 +143,7 @@ DeviceManagerThread::DeviceManagerThread()
     int result = pipe(CommandFd);
 	OVR_UNUSED( result );	// no warning
     OVR_ASSERT(!result);
-	LastTemperature = 0.0f;
-	LastTimeStamp = 0;
+
     AddSelectFd(NULL, CommandFd[0]);
 }
 
@@ -167,31 +156,6 @@ DeviceManagerThread::~DeviceManagerThread()
         close(CommandFd[1]);
     }
 }
-
-bool DeviceManagerThread::AddASensorNotifier(Notifier* notify, int type)
-{
-	ASensorNotifiers.PushBack(notify);
-	ASensorPoolTypes.PushBack(type);
-
-	OVR_ASSERT(ASensorNotifiers.GetSize() == ASensorPoolTypes.GetSize());
-	LogText("DeviceManagerThread::AddASensorNotifier %d (Tid=%d)\n", type, GetThreadTid());
-	return true;
-}
-
-bool DeviceManagerThread::RemoveASensorNotifier(Notifier* notify, int type)
-{
-	for (UPInt i = 0; i < ASensorNotifiers.GetSize(); i++)
-	{
-		if ((ASensorNotifiers[i] == notify) && (ASensorPoolTypes[i] == type))
-		{
-			ASensorNotifiers.RemoveAt(i);
-			ASensorPoolTypes.RemoveAt(i);
-			return true;
-		}
-	}
-	return false;
-}
-
 
 bool DeviceManagerThread::AddSelectFd(Notifier* notify, int fd)
 {
@@ -227,56 +191,8 @@ bool DeviceManagerThread::RemoveSelectFd(Notifier* notify, int fd)
     return false;
 }
 
-//static int event_count = 0;
-//static double event_time = 0;
-
-struct SensorObj
-{
-	ASensorRef	sensor;
-	int			id;
-	const char*	name;
-	int			type;
-	float		resolution;
-	int			minDelay;
-
-	SensorObj(ASensorRef ref, int _id)
-	{
-		sensor = ref;
-		id = _id;
-		name = ASensor_getName(sensor);
-		type = ASensor_getType(sensor);
-		resolution = ASensor_getResolution(sensor);
-		minDelay = ASensor_getMinDelay(sensor);
-	}
-
-	void Enable(ASensorEventQueue* evQueue)
-	{
-		int succ =  ASensorEventQueue_enableSensor(evQueue, sensor);
-		if (succ < 0)
-		{
-			LogText("DeviceManagerThread - enable Sensor %s Failed !!!!\n", name);
-		}
-		else{
-			ASensorEventQueue_setEventRate(evQueue, sensor, minDelay);
-		}
-	}
-
-	void Disable(ASensorEventQueue* evQueue)
-	{
-		int succ = ASensorEventQueue_disableSensor(evQueue, sensor);
-
-		if (succ < 0)
-		{
-			LogText("DeviceManagerThread - disable Sensor %s Failed !!!!\n", name);
-		}
-	}
-
-	void PrintInfo()
-	{
-		LogText("ASensor: name = %s , type = %d , res = %f , delay = %d \n", name , type , resolution , minDelay);
-	}
-
-};
+static int event_count = 0;
+static double event_time = 0;
 
 
 int DeviceManagerThread::Run()
@@ -290,80 +206,22 @@ int DeviceManagerThread::Run()
     // needed to set SCHED_FIFO
     DeviceManagerTid = gettid();
 
-    ASensorManager* sensorManager = NULL;
-    ASensorEventQueue* eventQueue = NULL;
-    ALooper* looper = NULL;
-
-    sensorManager = ASensorManager_getInstance();
-   
-	Array<SensorObj> sensors;
-
-	//获取手机上全部Sensor
-	ASensorList sensorList = NULL; 
-	int numSensor = ASensorManager_getSensorList(sensorManager, &sensorList);
-
-	for (int i = 0; i < numSensor; i++)
-	{
-		int type = ASensor_getType(sensorList[i]);
-		if (type == SENSOR_TYPE_ACCELEROMETER ||
-			type == SENSOR_TYPE_GYROSCOPE ||
-			type == SENSOR_TYPE_MAGNETIC_FIELD ||
-			type == SENSOR_TYPE_TEMPERATURE
-			)
-		{		 
-			sensors.PushBack(SensorObj(sensorList[i], i));
-		}
-	}
-
-	//打印全部Sensor信息
-	for (UPInt i = 0; i < sensors.GetSize(); i++)
-	{
-		sensors[i].PrintInfo();
-	}
-
-	looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
-	looper = ALooper_forThread();
-
-	if( looper == NULL )
-	{
-		LogText("Failed to create looper!");
-	}
-
-	eventQueue = ASensorManager_createEventQueue(sensorManager, looper, EVENT_IDEN, NULL, NULL);
-	OVR_UNUSED(looper);
-	OVR_UNUSED(eventQueue);
-
-	//启动所有Sensor
-	for (UPInt i = 0; i < sensors.GetSize(); i++)
-	{
-		sensors[i].Enable(eventQueue);
-	}
-	
     // Signal to the parent thread that initialization has finished.
     StartupEvent.SetEvent();
 
     while(!IsExiting())
     {
+
         // PopCommand will reset event on empty queue.
         if (PopCommand(&command))
         {
             command.Execute();
         }
         else
-        {
-			if(ASensorNotifiers.GetSize() > 0)
-			{
-				int ident;
-				int events;
-				struct android_poll_source* source;
+		{
+			ReadSensorDataFromUsb();
+			continue;
 
-				if ((ident = ALooper_pollAll(20, NULL, &events, (void**)&source)) >= 0) 
-				{
-					_ProcessSensorData(eventQueue,ident);
-				}
-			}
-
-#if 0
             bool commands = false;
             do
             {
@@ -424,7 +282,7 @@ int DeviceManagerThread::Run()
                                 {
                                     const double current_time = Timer::GetSeconds();
                                     const int eventHz = (int)( event_count / ( current_time - event_time ) + 0.5 );
-                                    LogText( "DeviceManagerThread - event %d (%dHz) (Tid=%d)\n", PollFds[i].fd, eventHz, GetThreadTid() );
+                                    LogText( "DeviceManagerThread - event %d (%dHz) (Tid=%d) (time=%f)\n", PollFds[i].fd, eventHz, GetThreadTid(), current_time );
                                     event_count = 0;
                                     event_time = current_time;
                                 }
@@ -457,8 +315,6 @@ int DeviceManagerThread::Run()
                     }
                 }
             } while (PollFds.GetSize() > 0 && !commands);
-#endif
-
         }
     }
 
@@ -497,146 +353,6 @@ void DeviceManagerThread::ResumeThread()
     LogText( "DeviceManagerThread - Suspend = false\n" );
 }
 
-void DeviceManagerThread::_ProcessSensorData(void* eventQueue ,int identifier)
-{
-	if (identifier != EVENT_IDEN){
-		return;
-	}
-
-	int eventCount = 0;
-	OVR_UNUSED(eventCount);
-	ASensorEvent event;
-	while (ASensorEventQueue_getEvents((ASensorEventQueue*)eventQueue, &event, 1) > 0)
-	{
-		SensorEventList.PushBack(event);
-	}
-
-	//int64_t currTimeStamp = 0x7fffffffffffffff;
-	for (UPInt i = 0; i < SensorEventList.GetSize(); i++)
-	{
-		ASensorEvent ev = SensorEventList.At(i);
-		if (ev.type == SENSOR_TYPE_ACCELEROMETER)
-		{
-			LastAccel.x = ev.vector.x;
-			LastAccel.y = ev.vector.y;
-			LastAccel.z = ev.vector.z;
-		}
-		else if (ev.type == SENSOR_TYPE_MAGNETIC_FIELD)
-		{
-			LastMag.x = ev.vector.x;
-			LastMag.y = ev.vector.y;
-			LastMag.z = ev.vector.z;
-		}
-		else if (ev.type == SENSOR_TYPE_GYROSCOPE)
-		{
-			LastGyro.x = ev.vector.x;
-			LastGyro.y = ev.vector.y;
-			LastGyro.z = ev.vector.z;
-		}
-		else if (ev.type == SENSOR_TYPE_TEMPERATURE)
-		{
-			LastTemperature = ev.temperature;
-		}
-		 
-		LastTimeStamp = ev.timestamp;
-		 
-		ASensorMessage msg;
-		msg.accel = LastAccel;
-		msg.gyro = LastGyro;
-		msg.mag = LastMag;
-		msg.temperature = LastTemperature;
-		msg.timestamp = LastTimeStamp;
-
-		for (UPInt j = 0; j < ASensorNotifiers.GetSize(); j++)
-		{
-			if (ASensorPoolTypes[j] == event.type)
-			{
-				ASensorNotifiers[j]->OnASensorEvent(&msg);
-			}
-		}
-	}
-
-	
-	 
-	SensorEventList.Clear();
-
-	//while (SensorEventList.GetSize() > 0)
-	//{
-	//	int eventTypes[4] = { 
-	//		SENSOR_TYPE_ACCELEROMETER, 
-	//		SENSOR_TYPE_MAGNETIC_FIELD, 
-	//		SENSOR_TYPE_GYROSCOPE,
-	//		SENSOR_TYPE_TEMPERATURE
-	//	}; 
-	//	int indexArray[4] = { 0 };
-	//	UPInt j = 0;
-	//	for (UPInt i = 0; i < SensorEventList.GetSize(); i++)
-	//	{
-	//		ASensorEvent ev = SensorEventList.At(i);
-	//		if (eventTypes[j] == ev.type)
-	//		{
-	//			indexArray[j++] = i;
-	//			if (j == 4)
-	//				break; 
-	//			i = 0;
-	//		}
-	//	}
-
-	//	if (j != 4)
-	//	{//若没有同时集其4个传感器信息
-	//		break;
-	//	}
-
-	//	ASensorMessage msg;
-	//	msg.timestamp = 0x7fffffffffffffff;
-	//	for (UPInt i = 0; i < 4; i++)
-	//	{
-	//		ASensorEvent ev = SensorEventList.At(indexArray[i]);
-	//		if (ev.type == SENSOR_TYPE_ACCELEROMETER)
-	//		{
-	//			msg.accel.x = ev.vector.x;
-	//			msg.accel.y = ev.vector.y;
-	//			msg.accel.z = ev.vector.z;
-	//		}
-	//		else if (ev.type == SENSOR_TYPE_MAGNETIC_FIELD)
-	//		{
-	//			msg.mag.x = ev.vector.x;
-	//			msg.mag.y = ev.vector.y;
-	//			msg.mag.z = ev.vector.z;
-	//		}
-	//		else if (ev.type == SENSOR_TYPE_GYROSCOPE)
-	//		{
-	//			msg.gyro.x = ev.vector.x;
-	//			msg.gyro.y = ev.vector.y;
-	//			msg.gyro.z = ev.vector.z;
-	//		}
-	//		else if (ev.type == SENSOR_TYPE_TEMPERATURE)
-	//		{
-	//			msg.temperature = ev.temperature;
-	//		}
-
-	//		//时间戳取最小者
-	//		msg.timestamp = OVR::Alg::Min(msg.timestamp, ev.timestamp);
-	//	}
-
-	//	for (UPInt i = 0; i < ASensorNotifiers.GetSize(); i++)
-	//	{
-	//		if (ASensorPoolTypes[i] == event.type)
-	//		{
-	//			ASensorNotifiers[i]->OnASensorEvent(&msg);
-	//		}
-	//	}
-
-	//	//移除已处理事件
-	//	for (int i = 0; i < 4; i++)
-	//	{
-	//		SensorEventList.RemoveAt(indexArray[i]);
-	//	}  
-	//}//end of while (SensorEventList.GetSize() > 0)
-	  
-}
-
-
 } // namespace Android
 
 
@@ -661,10 +377,10 @@ DeviceManager* DeviceManager::Create()
     {
         if (manager->Initialize(0))
         {
+			//manager->AddFactory(&MySensorDeviceFactory::GetInstance());
             manager->AddFactory(&LatencyTestDeviceFactory::GetInstance());
-            //manager->AddFactory(&SensorDeviceFactory::GetInstance());
-			manager->AddFactory(&MySensorDeviceFactory::GetInstance());
-            manager->AddFactory(&Android::HMDDeviceFactory::GetInstance());
+            manager->AddFactory(&SensorDeviceFactory::GetInstance());
+            //manager->AddFactory(&Android::HMDDeviceFactory::GetInstance());
 
             manager->AddRef();
         }

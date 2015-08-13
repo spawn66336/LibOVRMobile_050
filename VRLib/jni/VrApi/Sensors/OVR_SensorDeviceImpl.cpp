@@ -13,8 +13,23 @@ Copyright   :   Copyright 2014 Oculus VR, LLC. All Rights reserved.
 
 // HMDDeviceDesc can be created/updated through Sensor carrying DisplayInfo.
 
+#include "Kernel/OVR_Array.h"
 #include "Kernel/OVR_Timer.h"
 #include "Kernel/OVR_Alg.h"
+#include "jni.h"
+
+
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <linux/types.h>
+#include <sys/stat.h>
+#include <sys/poll.h>
+#include <unistd.h>
+#include <errno.h>
+#include <linux/usbdevice_fs.h>
+
+
 
 namespace OVR {
     
@@ -105,19 +120,13 @@ struct TrackerSample
 
 struct TrackerSensors
 {
-	//采样数量
     UByte	SampleCount;
-	//时间戳
     UInt16	Timestamp;
-
     UInt16	LastCommandID;
-	//温度
     SInt16	Temperature;
 
-	//加速计与陀螺仪采样
     TrackerSample Samples[3];
 
-	//磁场
     SInt16	MagX, MagY, MagZ;
 
     TrackerMessageType Decode(const UByte* buffer, int size)
@@ -689,6 +698,18 @@ SensorDeviceFactory &SensorDeviceFactory::GetInstance()
 
 void SensorDeviceFactory::EnumerateDevices(EnumerateVisitor& visitor)
 {
+	LogText("SensorDeviceFactory::EnumerateDevices");
+	HIDDeviceDesc hidDesc;
+	hidDesc.VendorId = Oculus_VendorId;
+	hidDesc.ProductId = Device_Tracker_ProductId;
+	hidDesc.Path = "mydevicepath";
+
+
+	SensorDeviceCreateDesc myDesc(this, hidDesc);
+	visitor.Visit(myDesc);
+
+	return;
+
 
     class SensorEnumerator : public HIDEnumerateVisitor
     {
@@ -763,6 +784,7 @@ bool SensorDeviceFactory::MatchVendorProduct(UInt16 vendorId, UInt16 productId) 
 
 bool SensorDeviceFactory::DetectHIDDevice(DeviceManager* pdevMgr, const HIDDeviceDesc& desc)
 {
+	return false;
     if (MatchVendorProduct(desc.VendorId, desc.ProductId))
     {
         if (desc.ProductId == Sensor_BootLoader)
@@ -815,6 +837,9 @@ bool SensorDeviceCreateDesc::GetDeviceInfo(DeviceInfo* info) const
 //-------------------------------------------------------------------------------------
 // ***** SensorDevice
 
+
+Array<SensorDeviceImpl*>  GSensorDevice;
+
 SensorDeviceImpl::SensorDeviceImpl(SensorDeviceCreateDesc* createDesc)
     : OVR::HIDDeviceImpl<OVR::SensorDevice>(createDesc, 0),
       Coordinates(SensorDevice::Coord_Sensor),
@@ -825,6 +850,8 @@ SensorDeviceImpl::SensorDeviceImpl(SensorDeviceCreateDesc* createDesc)
       MaxValidRange(SensorRangeImpl::GetMaxSensorRange()),
 	  pCalibration(NULL)
 {
+
+
     SequenceValid  = false;
     LastSampleCount= 0;
     LastTimestamp   = 0;
@@ -865,6 +892,9 @@ SensorDeviceImpl::SensorDeviceImpl(SensorDeviceCreateDesc* createDesc)
 	{
 		pCalibration = 	new SensorCalibration(this);
 	}
+	
+	GSensorDevice.PushBack(this);
+	LogText("SensorDeviceImpl constructor %p", this);
 }
 
 SensorDeviceImpl::~SensorDeviceImpl()
@@ -892,7 +922,6 @@ bool SensorDeviceImpl::Initialize(DeviceBase* parent)
 
 void SensorDeviceImpl::openDevice()
 {
-
     // Read the currently configured range from sensor.
     SensorRangeImpl sr(SensorRange(), 0);
 
@@ -903,6 +932,7 @@ void SensorDeviceImpl::openDevice()
         // Increase the magnetometer range, since the default value is not enough in practice
         CurrentRange.MaxMagneticField = 2.5f;
         setRange(CurrentRange);
+		LogText("sensor range MaxAcceleration %f MaxRotationRate %f", CurrentRange.MaxAcceleration, CurrentRange.MaxRotationRate);
     }
 
 	// Read the currently configured calibration from sensor.
@@ -926,7 +956,8 @@ void SensorDeviceImpl::openDevice()
     {
         displayInfo.Unpack();
         Coordinates = (displayInfo.DistortionType & SensorDisplayInfoImpl::Mask_BaseFmt) ?
-                      Coord_HMD : Coord_Sensor;
+		Coord_HMD : Coord_Sensor;
+		LogText("LensSeparation %f VCenter %f Resolution %hdx%hd", displayInfo.LensSeparation, displayInfo.VCenter, displayInfo.Resolution.H, displayInfo.Resolution.V);
     }
 
     // Read/Apply sensor config.
@@ -988,7 +1019,24 @@ void SensorDeviceImpl::closeDeviceOnError()
 }
 
 void SensorDeviceImpl::Shutdown()
-{   
+{
+	Array<SensorDeviceImpl*>::Iterator it = GSensorDevice.Begin();
+	for (; it != GSensorDevice.End(); ++it)
+	{
+		if (*it == this){
+			break;
+		}
+	}
+	if (it == GSensorDevice.End())
+	{
+		LogText("ERRRRRRRROR can not find this when SensorDeviceImpl::Shutdown()!");
+	}
+	else {
+		it.Remove();
+		LogText("remove SensorDeviceImpl %p", this);
+	}
+		
+	
     HIDDeviceImpl<OVR::SensorDevice>::Shutdown();
 
     LogText("OVR::SensorDevice - Closed '%s'\n", getHIDDesc()->Path.ToCStr());
@@ -996,12 +1044,10 @@ void SensorDeviceImpl::Shutdown()
 
 
 void SensorDeviceImpl::OnInputReport(UByte* pData, UInt32 length)
-{
-
+{	
     bool processed = false;
     if (!processed)
     {
-
         TrackerMessage message;
         if (DecodeTrackerMessage(&message, pData, length))
         {
@@ -1467,11 +1513,8 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
     if (message->Type != TrackerMessage_Sensors)
         return;
     
-	//时间单元1毫秒
     const double    timeUnit        = (1.0 / 1000.0);
-
     double          scaledTimeUnit  = timeUnit;
-
     TrackerSensors& s               = message->Sensors;
     // DK1 timestamps the first sample, so the actual device time will be later
     // by the time we get the message if there are multiple samples.
@@ -1480,13 +1523,12 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
     // Call OnMessage() within a lock to avoid conflicts with handlers.
     Lock::Locker scopeLock(HandlerRef.GetLock());
 
-	//当前时间（单位秒）
     const double now                 = OVR::Timer::GetSeconds();
     double absoluteTimeSeconds       = 0.0;
     
 
     if (SequenceValid)
-    {
+	{
         unsigned timestampDelta;
 
         if (s.Timestamp < LastTimestamp)
@@ -1528,7 +1570,8 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
 
         double deviceTime   = (FullTimestamp + timestampAdjust) * timeUnit;
         absoluteTimeSeconds = TimeFilter.SampleToSystemTime(deviceTime, now);
-        scaledTimeUnit      = TimeFilter.ScaleTimeUnit(timeUnit);
+		scaledTimeUnit = TimeFilter.ScaleTimeUnit(timeUnit);
+
 
 #endif
         
@@ -1552,7 +1595,9 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
 					pCalibration->Apply(sensors);
 				}
 
-                HandlerRef.GetHandler()->OnMessage(sensors);
+				LogText("before on message");
+				HandlerRef.GetHandler()->OnMessage(sensors);
+				LogText("after on message");
             }
         }
     }
@@ -1573,12 +1618,12 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
     	RealTimeDelta       = now - ( FullTimestamp * timeUnit );
         absoluteTimeSeconds = FullTimestamp * timeUnit + RealTimeDelta;
 #else
-		//将当前的时间戳+采样调整时间以算出设备当前时间，由于采样率是1000Hz，所以
-		//timestampAdjust值为此次消息采样数-1。
+
         double deviceTime   = (FullTimestamp + timestampAdjust) * timeUnit;
         absoluteTimeSeconds = TimeFilter.SampleToSystemTime(deviceTime, now);
         scaledTimeUnit      = TimeFilter.ScaleTimeUnit(timeUnit);
 #endif
+
     }
 
     LastSampleCount = s.SampleCount;
@@ -1611,6 +1656,7 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
             sensors.Acceleration  = AccelFromBodyFrameUpdate(s, i, convertHMDToSensor);
             sensors.RotationRate  = EulerFromBodyFrameUpdate(s, i, convertHMDToSensor);
             sensors.MagneticField = MagFromBodyFrameUpdate(s, convertHMDToSensor);
+			
             replaceWithPhoneMag(&(sensors.MagneticField), &(sensors.MagneticBias));
             sensors.Temperature   = s.Temperature * 0.01f;
 
@@ -1619,7 +1665,7 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
 				pCalibration->Apply(sensors);
 			}
 
-            HandlerRef.GetHandler()->OnMessage(sensors);
+			HandlerRef.GetHandler()->OnMessage(sensors);
 
             // TimeDelta for the last two sample is always fixed.
             sensors.TimeDelta = (float)scaledTimeUnit;
@@ -1639,12 +1685,13 @@ void SensorDeviceImpl::onTrackerMessage(TrackerMessage* message)
         LastMagneticField = MagFromBodyFrameUpdate(s, convertHMDToSensor);
         replaceWithPhoneMag(&LastMagneticField, &LastMagneticBias);
         LastTemperature   = s.Temperature * 0.01f;
+
     }
 }
 
 void SensorDeviceImpl::replaceWithPhoneMag(Vector3f* mag, Vector3f* bias)
 {
-
+	return;
 	Vector3f magPhone;
 	Vector3f biasPhone;
 	pPhoneSensors->GetLatestUncalibratedMagAndBiasValue(&magPhone, &biasPhone);
@@ -1671,6 +1718,10 @@ void SensorDeviceImpl::replaceWithPhoneMag(Vector3f* mag, Vector3f* bias)
 	*bias = resBias;
 }
 
+
+
+
 } // namespace OVR
+
 
 
