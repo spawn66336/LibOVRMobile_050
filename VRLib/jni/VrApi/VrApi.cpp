@@ -1501,6 +1501,8 @@ ovrMobile * ovr_EnterVrMode( ovrModeParms parms, ovrHmdInfo * returnedHmdInfo )
 	ovr->Parms = parms;
 	ovr->Destroyed = false;
 
+	LOG("ovrMobile new!");
+
 	ovrSensorState state = ovr_GetSensorStateInternal( ovr_GetTimeInSeconds() );
 	if ( state.Status & ovrStatus_OrientationTracked )
 	{
@@ -1510,6 +1512,8 @@ ovrMobile * ovr_EnterVrMode( ovrModeParms parms, ovrHmdInfo * returnedHmdInfo )
 	{
 		WARN( "Operating without a sensor.");
 	}
+
+	LOG("ovr_GetSensorStateInternal finished");
 
 	// Let GlUtils look up extensions
 	OVR::GL_FindExtensions();
@@ -1527,10 +1531,14 @@ ovrMobile * ovr_EnterVrMode( ovrModeParms parms, ovrHmdInfo * returnedHmdInfo )
 	// Based on sensor ID and platform, determine the HMD
 	UpdateHmdInfo( ovr );
 
+	LOG("UpdateHmdInfo finished");
+
 	// Start up our vsync callbacks.
 	const jmethodID startVsyncId = ovr_GetStaticMethodID( ovr->Jni, VrLibClass,
     		"startVsync", "(Landroid/app/Activity;)V" );
 	ovr->Jni->CallStaticVoidMethod( VrLibClass, startVsyncId, ovr->Parms.ActivityObject );
+
+	LOG("startVsync finished");
 
 	// Register our HMT receivers if they have not already been registered.
 	ovr_RegisterHmtReceivers( ovr->Jni, ovr->Parms.ActivityObject );
@@ -1539,6 +1547,8 @@ ovrMobile * ovr_EnterVrMode( ovrModeParms parms, ovrHmdInfo * returnedHmdInfo )
 	const jmethodID startReceiversId = ovr_GetStaticMethodID( ovr->Jni, VrLibClass,
     		"startReceivers", "(Landroid/app/Activity;)V" );
 	ovr->Jni->CallStaticVoidMethod( VrLibClass, startReceiversId, ovr->Parms.ActivityObject );
+
+	LOG("startReceivers finished");
 
 #if defined( OVR_ENABLE_CAPTURE )
 	const char *enableCapture = ovr_GetLocalPreferenceValueForKey(LOCAL_PREF_ENABLE_CAPTURE, "0");
@@ -1663,6 +1673,8 @@ ovrMobile * ovr_EnterVrMode( ovrModeParms parms, ovrHmdInfo * returnedHmdInfo )
 	{
 		ovr->Jni->CallStaticVoidMethod( VrLibClass, setActivityWindowFullscreenID, ovr->Parms.ActivityObject );
 	}
+
+	LOG("---------- ovr_EnterVrMode Finished ----------");
 
 	return ovr;
 }
