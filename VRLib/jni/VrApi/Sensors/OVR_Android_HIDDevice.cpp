@@ -18,7 +18,6 @@ Copyright   :   Copyright 2014 Oculus VR, LLC. All Rights reserved.
 #include <string.h>
 #include <linux/types.h>
 #include <sys/stat.h>
-
 #include <jni.h>
 
 // Definitions from linux/hidraw.h
@@ -51,9 +50,19 @@ struct hidraw_devinfo {
 // number of reports to buffer
 #define HIDRAW_BUFFER_SIZE 64
 
-#define OVR_DEVICE_NAMES	"ovr"
+#define OVR_DEVICE_NAMES	"002"
+#define OVR_DEVICE_DIR		"/dev/bus/usb/002"
 
-namespace OVR { namespace Android {
+
+
+namespace OVR { 
+
+
+	bool UsbGetFeature(UByte* data, uint32_t size);
+	bool UsbSetFeature(UByte* data, uint32_t size);
+
+	
+	namespace Android {
     
 static const char * deviceModeNames[DEVICE_MODE_MAX] =
 {
@@ -84,7 +93,6 @@ bool HIDDeviceManager::initializeManager()
 bool HIDDeviceManager::Initialize()
 {
 	DevManager->pThread->AddTicksNotifier(this);
-	//扫描/dev/下的所有ovr设备
 	scanForDevices(true);
 	return true;
 }
@@ -228,9 +236,9 @@ bool HIDDeviceManager::getStringProperty(const String& devNodePath, const char* 
 //-----------------------------------------------------------------------------
 bool HIDDeviceManager::Enumerate(HIDEnumerateVisitor* enumVisitor)
 {
-
+	LogText("HIDDeviceManager::Enumerate");
     // Scan the /dev directory looking for devices
-    DIR* dir = opendir("/dev");
+	DIR* dir = opendir(OVR_DEVICE_DIR);
     if (dir)
     {
         dirent* entry = readdir(dir);
@@ -240,7 +248,7 @@ bool HIDDeviceManager::Enumerate(HIDEnumerateVisitor* enumVisitor)
             {   // Open the device to check if this is an Oculus device.
 
             	char devicePath[32];
-                sprintf(devicePath, "/dev/%s", entry->d_name);
+				sprintf(devicePath, "%s/%s", OVR_DEVICE_DIR, entry->d_name);
 
 
                 // Try to open for both read and write initially if we can.
@@ -409,7 +417,7 @@ HIDDevice::~HIDDevice()
 //-----------------------------------------------------------------------------
 bool HIDDevice::HIDInitialize(const String& path)
 {
-
+	LogText("HIDDevice::HIDInitialize");
 	DevDesc.Path = path;
 
 	if (!openDevice())
@@ -426,8 +434,8 @@ bool HIDDevice::HIDInitialize(const String& path)
     }
 
 
-    HIDManager->DevManager->pThread->AddTicksNotifier(this);
-    HIDManager->AddNotificationDevice(this);
+    //HIDManager->DevManager->pThread->AddTicksNotifier(this);
+   // HIDManager->AddNotificationDevice(this);
 
     LogText("OVR::Android::HIDDevice - Opened:'%s'  Manufacturer:'%s'  Product:'%s'  Serial#:'%s'  Version:'%04x'\n",
     		DevDesc.Path.ToCStr(),
@@ -442,8 +450,9 @@ bool HIDDevice::HIDInitialize(const String& path)
 //-----------------------------------------------------------------------------
 bool HIDDevice::initDeviceInfo()
 {
+	LogText("HIDDevice::initDeviceInfo");
     // Device must have been successfully opened.
-	OVR_ASSERT(Device >= 0);
+	//OVR_ASSERT(Device >= 0);
 
 #if 0
     int desc_size = 0;
@@ -474,6 +483,10 @@ bool HIDDevice::initDeviceInfo()
     InputReportBufferLength = 62;
     OutputReportBufferLength = 0;
     FeatureReportBufferLength = 69;
+
+
+	LogText("HIDDevice::initDeviceInfo");
+	return true;
     
     if (ReadBufferSize < InputReportBufferLength)
     {
@@ -498,21 +511,29 @@ bool HIDDevice::openDevice()
 
 	OVR_ASSERT(Device == -1);
 
-	OVR_DEBUG_LOG(("HIDDevice::openDevice %s", DevDesc.Path.ToCStr()));
+	LogText("HIDDevice::openDevice %s", DevDesc.Path.ToCStr());
+
+	if (strstr(DevDesc.Path.ToCStr(), "mydevicepath")){
+		return true;
+	}
 
 	// Have to iterate through devices to find the one with this path.
 	// Scan the /dev directory looking for devices
-	DIR* dir = opendir("/dev");
+	DIR* dir = opendir(OVR_DEVICE_DIR);
 	if (dir)
 	{
 		dirent* entry = readdir(dir);
 		while (entry)
 		{
+			LogText("device %s", entry->d_name);
 			if (strstr(entry->d_name, OVR_DEVICE_NAMES))
 			{
+				
 				// Open the device to check if this is an Oculus device.
-				char devicePath[32];
-				sprintf(devicePath, "/dev/%s", entry->d_name);
+				char devicePath[64];
+				sprintf(devicePath, "%s/%s", OVR_DEVICE_DIR, entry->d_name);
+
+				LogText("found device %s", devicePath);
 
 				// Try to open for both read and write if we can.
 				int device = open(devicePath, O_RDWR);
@@ -599,9 +620,12 @@ void HIDDevice::closeDeviceOnIOError()
     closeDevice();
 }
 
+
 //-----------------------------------------------------------------------------
 bool HIDDevice::SetFeatureReport(UByte* data, UInt32 length)
 {
+	return UsbSetFeature(data, length);
+
     if (Device < 0)
         return false;
     
@@ -621,6 +645,8 @@ bool HIDDevice::SetFeatureReport(UByte* data, UInt32 length)
 //-----------------------------------------------------------------------------
 bool HIDDevice::GetFeatureReport(UByte* data, UInt32 length)
 {
+	return UsbGetFeature(data, length);
+
     if (Device < 0)
         return false;
 
@@ -778,7 +804,7 @@ void HIDDeviceManager::getCurrentDevices(Array<String>* deviceList)
 {
 	deviceList->Clear();
 
-	DIR* dir = opendir("/dev");
+	DIR* dir = opendir(OVR_DEVICE_DIR);
 	if (dir)
 	{
 		dirent* entry = readdir(dir);
@@ -786,8 +812,10 @@ void HIDDeviceManager::getCurrentDevices(Array<String>* deviceList)
 		{
 			if (strstr(entry->d_name, OVR_DEVICE_NAMES))
 			{
-				char dev_path[32];
-				sprintf(dev_path, "/dev/%s", entry->d_name);
+				char dev_path[64];
+
+				sprintf(dev_path, "%s/%s", OVR_DEVICE_DIR, entry->d_name);
+				//sprintf(dev_path, "/dev/%s", entry->d_name);
 
 				deviceList->PushBack(String(dev_path));
 			}
@@ -802,7 +830,7 @@ void HIDDeviceManager::getCurrentDevices(Array<String>* deviceList)
 //-----------------------------------------------------------------------------
 void HIDDeviceManager::scanForDevices(bool firstScan)
 {
-
+	LogText("HIDDeviceManager::scanForDevices");
 	// Create current device list.
 	Array<String> currentDeviceList;
 	getCurrentDevices(&currentDeviceList);
@@ -940,5 +968,10 @@ HIDDeviceManager* HIDDeviceManager::Create()
     return manager.GetPtr();
 }
 
+
 } // namespace OVR
+
+
+
+
 

@@ -57,6 +57,7 @@ public:
     virtual MatchResult MatchDevice(const DeviceCreateDesc& other,
                                     DeviceCreateDesc**) const
     {
+		LogText("SensorDeviceCreateDesc MatchDevice");
         if ((other.Type == Device_Sensor) && (pFactory == other.pFactory))
         {
             const SensorDeviceCreateDesc& s2 = (const SensorDeviceCreateDesc&) other;
@@ -68,6 +69,7 @@ public:
 
     virtual bool MatchHIDDevice(const HIDDeviceDesc& hidDesc) const
     {
+		LogText("SensorDeviceCreateDesc MatchHIDDevice");
         // should paths comparison be case insensitive?
         return ((HIDDesc.Path.CompareNoCase(hidDesc.Path) == 0) &&
                 (HIDDesc.SerialNumber == hidDesc.SerialNumber) &&
