@@ -1525,6 +1525,8 @@ ovrMobile * ovr_EnterVrMode( ovrModeParms parms, ovrHmdInfo * returnedHmdInfo )
 		EGLSurface surface = eglGetCurrentSurface( EGL_DRAW );
 		eglQuerySurface( display, surface, EGL_WIDTH, &windowSurfaceWidth );
 		eglQuerySurface( display, surface, EGL_HEIGHT, &windowSurfaceHeight );
+		windowSurfaceWidth = 2560;
+		windowSurfaceHeight = 1440;
 		LOG( "Window Surface Size: [%dx%d]", windowSurfaceWidth, windowSurfaceHeight );
 	}
 
